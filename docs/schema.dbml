@@ -1,5 +1,13 @@
-// MySQL 기준
-// 음료의 사이즈/온도 제한은 애플리케이션에서 검증한다.
+// =====================================================================
+// 카페 주문 관리 DB - ERD 정의
+// DBMS: MySQL 8.0
+//
+// [DBML로 표현되지 않는 것]
+//   - CHECK 제약 (product.type/category 조합, price >= 0, quantity > 0)
+//   - ENGINE / CHARSET / COLLATE
+//   실제 정의는 schema.sql을 기준으로 한다.
+// =====================================================================
+
 
 Enum customer_grade {
   WHITE
@@ -59,18 +67,23 @@ Table customer {
   grade customer_grade [not null, default: 'WHITE']
   joined_at datetime [not null]
 
-  note: '회원만 저장한다. 비회원은 customer_id를 NULL로 처리한다.'
+  note: '회원만 저장한다. 비회원은 orders.customer_id를 NULL로 처리한다.'
 }
 
 
 Table orders {
   id int [pk, increment]
   customer_id int [null, note: 'NULL = 비회원 주문']
-  ordered_at datetime [not null]
+  ordered_at datetime [not null, note: '주문 발생 시각']
   status order_status [not null, default: 'PENDING']
   order_type order_type [not null]
+  updated_at datetime [not null, default: `CURRENT_TIMESTAMP`, note: 'ON UPDATE CURRENT_TIMESTAMP']
 
-  note: '주문 처리 상태와 배달 상태는 별도로 관리한다.'
+  note: '''
+  주문 헤더. 주문 전체에 공통으로 적용되는 정보만 둔다.
+  총액은 SUM(order_item.quantity * order_item.unit_price)로 계산하며 저장하지 않는다.
+  주문 처리 상태(orders.status)와 배달 진행 상태(delivery.status)는 별도로 관리한다.
+  '''
 }
 
 
@@ -79,10 +92,15 @@ Table product {
   name varchar(100) [not null, unique]
   type product_type [not null]
   category product_category [not null]
-  price int [not null]
+  price int [not null, note: '현재 판매가']
   is_sold_out boolean [not null, default: false]
 
-  note: '음료와 디저트의 공통 상품 정보를 관리한다.'
+  note: '''
+  음료와 디저트의 공통 상품 정보.
+  type과 category의 유효한 조합은 CHECK 제약으로 DB에서 강제한다.
+    DRINK   -> COFFEE / NON_COFFEE
+    DESSERT -> WHOLE_CAKE / SLICE_CAKE / BAKED_GOODS / BREAD
+  '''
 }
 
 
@@ -90,20 +108,23 @@ Table order_item {
   id int [pk, increment]
   order_id int [not null]
   product_id int [not null]
-
   quantity int [not null]
-  unit_price int [not null, note: '주문 시점의 최종 단가']
-
+  unit_price int [not null, note: '주문 시점의 단가. product.price와 다를 수 있음']
   size drink_size [null, note: '음료인 경우에만 사용']
   temperature drink_temperature [null, note: '음료인 경우에만 사용']
 
-  note: '음료의 사이즈/온도 선택 가능 여부는 애플리케이션에서 검증한다.'
+  note: '''
+  주문 항목. 항목마다 값이 달라지는 정보만 둔다.
+  unit_price를 따로 저장하는 이유는 product.price가 바뀌어도
+  과거 주문 금액이 소급 변경되지 않게 하기 위함이다.
+  특정 음료가 어떤 사이즈/온도를 제공하는지는 애플리케이션에서 검증한다.
+  '''
 }
 
 
 Table delivery {
   id int [pk, increment]
-  order_id int [not null, unique]
+  order_id int [not null, unique, note: 'UNIQUE로 orders와 1:1 관계를 강제']
 
   recipient_name varchar(100) [not null]
   recipient_phone varchar(20) [not null]
@@ -112,11 +133,33 @@ Table delivery {
 
   status delivery_status [not null, default: 'WAITING']
 
-  note: 'DELIVERY 주문에 대해서만 생성한다.'
+  note: '''
+  배달 정보. order_type이 DELIVERY인 주문에 대해서만 생성한다.
+  이 조건은 애플리케이션에서 검증한다. CHECK는 같은 행 안의 컬럼만
+  비교할 수 있어 다른 테이블의 값(orders.order_type)을 참조할 수 없다.
+  복합 PK(id, order_type)를 쓰면 DB로 강제할 수 있으나
+  DELIVERY 여부는 주문의 속성이지 주문 자체의 식별자는 아니므로
+  단일 PK를 채택했다.
+  '''
 }
 
 
-Ref: orders.customer_id >? customer.id
-Ref: order_item.order_id > orders.id
-Ref: order_item.product_id > product.id
-Ref: delivery.order_id - orders.id
+// ---------------------------------------------------------------------
+// 관계
+//   >  : many-to-one
+//   -  : one-to-one
+//   ?  : 해당 쪽이 optional (>? = 참조되는 쪽이 없을 수 있음)
+// ---------------------------------------------------------------------
+
+// 회원 1 : N 주문 (비회원 주문이 있으므로 customer 쪽이 optional)
+// 회원 탈퇴 후에도 주문 기록과 매출은 남겨야 하므로 SET NULL
+Ref: orders.customer_id >? customer.id [delete: set null]
+
+// 주문 1 : N 주문항목 (주문이 삭제되면 항목도 존재 이유가 없음)
+Ref: order_item.order_id > orders.id [delete: cascade]
+
+// 상품 1 : N 주문항목 (이미 판매된 상품은 삭제 불가)
+Ref: order_item.product_id > product.id [delete: restrict]
+
+// 주문 1 : 1 배달정보 (DELIVERY 주문에만 생성되므로 delivery 쪽이 optional)
+Ref: delivery.order_id ?- orders.id [delete: cascade]
