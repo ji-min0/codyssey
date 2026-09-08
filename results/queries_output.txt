@@ -1,0 +1,91 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	name	type	category	price
+9	마카롱세트	DESSERT	BAKED_GOODS	12000
+8	치즈케이크	DESSERT	SLICE_CAKE	7500
+7	초코케이크	DESSERT	SLICE_CAKE	7000
+4	딸기스무디	DRINK	NON_COFFEE	6000
+5	망고스무디	DRINK	NON_COFFEE	6000
+6	블루베리스무디	DRINK	NON_COFFEE	6000
+id	name	category	price
+6	블루베리스무디	NON_COFFEE	6000
+id	customer_id	ordered_at	status	order_type
+12	3	2026-09-03 11:40:00	PREPARING	DELIVERY
+11	7	2026-08-27 14:20:00	COMPLETED	DELIVERY
+10	6	2026-08-14 17:10:00	COMPLETED	DELIVERY
+9	9	2026-08-06 15:25:00	COMPLETED	DELIVERY
+8	1	2026-07-30 08:40:00	COMPLETED	DELIVERY
+id	customer_id	ordered_at	status	order_type
+4	5	2026-07-03 16:45:00	COMPLETED	DELIVERY
+5	2	2026-07-09 10:15:00	CANCELLED	DELIVERY
+6	8	2026-07-16 13:50:00	COMPLETED	DELIVERY
+7	4	2026-07-24 18:05:00	COMPLETED	TOGO
+8	1	2026-07-30 08:40:00	COMPLETED	DELIVERY
+order_id	customer_name	grade	ordered_at	order_type	status
+1	김서연	BLACK	2026-06-05 09:20:00	IN	COMPLETED
+2	이하은	RED	2026-06-12 14:10:00	DELIVERY	COMPLETED
+4	정민서	BLACK	2026-07-03 16:45:00	DELIVERY	COMPLETED
+5	박도윤	WHITE	2026-07-09 10:15:00	DELIVERY	CANCELLED
+6	임건우	RED	2026-07-16 13:50:00	DELIVERY	COMPLETED
+7	최우진	WHITE	2026-07-24 18:05:00	TOGO	COMPLETED
+8	김서연	BLACK	2026-07-30 08:40:00	DELIVERY	COMPLETED
+9	한소율	BLACK	2026-08-06 15:25:00	DELIVERY	COMPLETED
+10	강지호	WHITE	2026-08-14 17:10:00	DELIVERY	COMPLETED
+11	윤채원	WHITE	2026-08-27 14:20:00	DELIVERY	COMPLETED
+12	이하은	RED	2026-09-03 11:40:00	DELIVERY	PREPARING
+order_id	ordered_at	product_name	size	temperature	quantity	unit_price	amount
+1	2026-06-05 09:20:00	아메리카노	REGULAR	HOT	2	3500	7000
+1	2026-06-05 09:20:00	초코케이크	NULL	NULL	1	7000	7000
+id	name	grade	order_count
+1	김서연	BLACK	2
+3	이하은	RED	2
+2	박도윤	WHITE	1
+4	최우진	WHITE	1
+5	정민서	BLACK	1
+6	강지호	WHITE	1
+7	윤채원	WHITE	1
+8	임건우	RED	1
+9	한소율	BLACK	1
+10	신예린	WHITE	0
+id	name	category	price
+6	블루베리스무디	NON_COFFEE	6000
+id	name	total_quantity	total_revenue
+1	아메리카노	8	29000
+9	마카롱세트	2	24000
+4	딸기스무디	3	18000
+8	치즈케이크	2	15000
+7	초코케이크	2	14000
+2	카페라떼	3	13500
+5	망고스무디	2	12000
+10	베이글	3	11400
+3	에스프레소	1	3500
+order_month	order_count	revenue
+2026-06	3	29500
+2026-07	4	51600
+2026-08	3	41300
+2026-09	1	18000
+type	category	product_count	avg_price
+DRINK	COFFEE	3	4000
+DRINK	NON_COFFEE	3	6000
+DESSERT	SLICE_CAKE	2	7250
+DESSERT	BAKED_GOODS	1	12000
+DESSERT	BREAD	1	3800
+order_id	ordered_at	order_total
+4	2026-07-03 16:45:00	24000
+12	2026-09-03 11:40:00	18000
+9	2026-08-06 15:25:00	16500
+1	2026-06-05 09:20:00	14000
+10	2026-08-14 17:10:00	13000
+id	order_status	updated_at	delivery_status
+12	COMPLETED	2026-09-08 04:27:08	DELIVERED
+cancelled_orders	items_of_order_5	delivery_of_order_5
+1	1	1
+cancelled_orders	items_of_order_5	delivery_of_order_5
+0	0	0
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	orders	NULL	ALL	NULL	NULL	NULL	NULL	11	11.11	Using where
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	orders	NULL	range	idx_orders_ordered_at	idx_orders_ordered_at	5	NULL	4	100.00	Using index condition
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+orders	0	PRIMARY	1	id	A	11	NULL	NULL		BTREE			YES	NULL
+orders	1	fk_orders_customer	1	customer_id	A	10	NULL	NULL	YES	BTREE			YES	NULL
+orders	1	idx_orders_ordered_at	1	ordered_at	A	11	NULL	NULL		BTREE			YES	NULL
