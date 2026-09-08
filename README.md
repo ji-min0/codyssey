@@ -9,7 +9,7 @@ SQL만으로 카페 주문 도메인의 데이터 모델을 설계하고, 요구
 
 | 항목             | 값                                  |
 | -------------- | ---------------------------------- |
-| DBMS           | MySQL 8.0                          |
+| DBMS           | MySQL 8.0.46                       |
 | Storage Engine | InnoDB                             |
 | Character Set  | utf8mb4 (`utf8mb4_unicode_ci`)     |
 | 실행 환경          | Docker (OrbStack)                  |
@@ -42,6 +42,24 @@ docker exec -i cafe-mysql mysql -uroot -proot < schema.sql
 
 `schema.sql`은 기존 테이블을 먼저 삭제하므로 여러 번 실행해도 동일한 스키마를 구성할 수 있다.
 
+![스키마 생성](./results/run_schema.png)
+
+### 3. 샘플 데이터 입력
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot < data.sql
+```
+
+실행 결과로 각 테이블의 행 수가 출력된다.
+
+### 4. CLI로 조회할 때
+
+```bash
+docker exec -it cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 cafe_order
+```
+
+`--default-character-set` 옵션이 필요한 이유는 아래 문자셋 트러블슈팅 항목에 정리했다.
+
 ---
 
 ## ERD
@@ -73,6 +91,33 @@ docker exec -i cafe-mysql mysql -uroot -proot < schema.sql
 | `orders`     | 주문 헤더. 주문 전체에 공통인 정보만 저장한다                      |
 | `order_item` | 주문 항목. 항목마다 달라지는 정보를 저장한다                       |
 | `delivery`   | 배달 주문의 배송 정보를 저장한다                              |
+
+---
+
+## 샘플 데이터
+
+| 테이블          | 행 수 | 결과 캡처                                          |
+| ------------ | --: | ---------------------------------------------- |
+| `customer`   |  10 | [run_data_5.png](./results/run_data_5.png)     |
+| `product`    |  10 | [run_data_2.png](./results/run_data_2.png)     |
+| `orders`     |  12 | [run_data_3.png](./results/run_data_3.png)     |
+| `order_item` |  20 | [run_data_4.png](./results/run_data_4.png)     |
+| `delivery`   |  10 | [run_data_1.png](./results/run_data_1.png)     |
+
+### 쿼리 실습을 위해 의도적으로 포함한 데이터
+
+| 데이터                        | 목적                                            |
+| -------------------------- | --------------------------------------------- |
+| 주문 이력이 없는 회원 1명 (신예린)      | LEFT JOIN / 서브쿼리로 "주문한 적 없는 회원" 조회            |
+| 판매 이력이 없는 상품 1개 (블루베리스무디)  | LEFT JOIN으로 "팔린 적 없는 상품" 조회                   |
+| 비회원 주문 1건                  | `customer_id IS NULL` 처리와 `COUNT` 함수의 NULL 취급 |
+| 취소 주문 1건                   | 매출 집계에서 제외해야 하는 데이터                           |
+| 2026-08-01 아메리카노 가격 인상     | `unit_price`와 `product.price`가 달라지는 상황        |
+
+`orders`의 `order_type`이 DELIVERY인 주문은 10건이며, `delivery`는 그 10건에 대해서만 생성된다.
+
+가격 인상은 아메리카노를 3500원에서 4000원으로 올린 것으로 설정했다.
+인상 이전 주문 3건에는 `unit_price`가 3500으로 남아 있어, 단가를 스냅샷으로 저장한 이유가 데이터로 확인된다.
 
 ---
 
@@ -202,17 +247,66 @@ DB의 제약 조건으로 데이터 구조와 기본적인 참조 무결성을 �
 
 ---
 
+## 문자셋 트러블슈팅
+
+### 증상
+
+`data.sql`을 실행한 뒤 조회하면 한글이 아래처럼 깨져서 저장되어 있었다.
+
+```text
+신예린  →  ì‹ ì˜ˆë¦°
+```
+
+![이중 인코딩](./docs/double_encoded.png)
+
+### 원인
+
+UTF-8로 저장된 파일을 서버가 latin1로 해석한 뒤 utf8mb4로 변환하면서 발생한 **이중 인코딩(double encoding)** 이다.
+
+`SHOW VARIABLES LIKE 'character_set%'` 결과를 보면 저장 쪽과 전송 쪽이 서로 다른 문자셋을 사용하고 있었다.
+
+| 변수                         | 값       | 역할              |
+| -------------------------- | ------- | --------------- |
+| `character_set_database`   | utf8mb4 | 저장              |
+| `character_set_server`     | utf8mb4 | 저장              |
+| `character_set_client`     | latin1  | 클라이언트가 보내는 SQL문 |
+| `character_set_connection` | latin1  | 서버가 처리할 때의 인코딩  |
+| `character_set_results`    | latin1  | 서버가 돌려주는 결과     |
+
+`CREATE DATABASE`와 `DEFAULT CHARSET`은 **저장 쪽** 설정이므로 정상이었다.
+문제는 접속할 때마다 클라이언트가 결정하는 **전송 쪽** 세 변수였고, 이 값들은 스키마 정의의 영향을 받지 않는다.
+
+서버 입장에서는 "latin1로 들어온 바이트"를 utf8mb4로 정직하게 변환한 것이며,
+그 바이트가 사실은 UTF-8이었다는 점이 문제였다.
+
+### 해결
+
+`schema.sql`과 `data.sql` 첫 줄에 `SET NAMES utf8mb4;`를 추가했다.
+
+```sql
+SET NAMES utf8mb4;
+```
+
+이 한 줄은 `character_set_client`, `character_set_connection`, `character_set_results`를 한 번에 utf8mb4로 설정한다.
+
+CLI 옵션(`--default-character-set=utf8mb4`) 대신 SQL 파일에 명시한 이유는, 어떤 클라이언트로 실행하더라도 동일하게 동작하도록 하기 위해서다.
+
+다만 `SET NAMES`는 세션 단위로 적용되므로, `-e` 옵션으로 쿼리를 직접 실행하거나 CLI로 접속해 조회할 때는 `--default-character-set=utf8mb4`를 함께 지정해야 한다.
+
+---
+
 ## MySQL 전용 문법
 
 표준 SQL 범위를 벗어난 문법은 SQL 파일에 주석으로 표시했다.
 
-| 문법                               | 사용처                   |
-| -------------------------------- | --------------------- |
-| `AUTO_INCREMENT`                 | 모든 테이블의 PK            |
-| `ENUM(...)`                      | 상태/분류/옵션 컬럼           |
-| `BOOLEAN`                        | `product.is_sold_out` |
-| `ON UPDATE CURRENT_TIMESTAMP`    | `orders.updated_at`   |
-| `ENGINE` / `CHARSET` / `COMMENT` | 모든 테이블                |
+| 문법                               | 사용처                    |
+| -------------------------------- | ---------------------- |
+| `AUTO_INCREMENT`                 | 모든 테이블의 PK             |
+| `ENUM(...)`                      | 상태/분류/옵션 컬럼            |
+| `BOOLEAN`                        | `product.is_sold_out`  |
+| `ON UPDATE CURRENT_TIMESTAMP`    | `orders.updated_at`    |
+| `SET NAMES`                      | `schema.sql`, `data.sql` 첫 줄 |
+| `ENGINE` / `CHARSET` / `COMMENT` | 모든 테이블                 |
 
 `BOOLEAN`은 MySQL에서 `TINYINT(1)`의 별칭으로 동작한다.
 
@@ -229,18 +323,23 @@ ENUM의 선언 순서는 상태 진행 순서에 맞췄다. MySQL에서 ENUM은 
 ├── README.md
 ├── docs/
 │   ├── schema.dbml
-│   └── erd.png
+│   ├── erd.png
+│   └── double_encoded.png	# 문자셋 트러블슈팅
+├── results/
+│   ├── run_schema.png		# 스키마 생성 결과
+│   └── run_data_1~5.png	# 테이블별 데이터 입력 결과
 └── sql/
-    └── schema.sql	# 스키마 생성
+    ├── schema.sql		# 스키마 생성
+    └── data.sql		# 샘플 데이터
 ```
 
-현재 단계에서는 **스키마 설계와 ERD 작성까지 완료**한 상태다.
+현재 단계에서는 **스키마 설계, ERD 작성, 샘플 데이터 입력까지 완료**한 상태다.
 
-추후 데이터 및 쿼리 작성이 완료되면 다음 파일을 추가한다.
+추후 쿼리 작성이 완료되면 다음 파일을 추가한다.
 
 ```text
-├── data.sql        # 샘플 데이터
-└── queries.sql     # 핵심 쿼리
+sql/
+└── queries.sql		# 핵심 쿼리 15개
 
-results/            # 쿼리 실행 결과
+results/		# 쿼리별 실행 결과
 ```
