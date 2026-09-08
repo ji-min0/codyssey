@@ -52,7 +52,26 @@ docker exec -i cafe-mysql mysql -uroot -proot < data.sql
 
 실행 결과로 각 테이블의 행 수가 출력된다.
 
-### 4. CLI로 조회할 때
+### 4. 쿼리 실행
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 \
+  < queries.sql > results/queries_output.txt 2>&1
+```
+
+`queries.sql`의 Q13(UPDATE)과 Q14(DELETE)는 데이터를 변경하므로, 이 파일은 연속으로 두 번 실행하면 첫 실행과 결과가 달라진다.
+
+* Q14가 취소 주문을 삭제하므로, 재실행 시 Q09/Q10/Q12의 매출 집계에서 취소 주문이 처음부터 존재하지 않는 상태가 된다.
+* Q15의 `CREATE INDEX`는 인덱스가 이미 존재하여 `Duplicate key name` 오류가 발생한다.
+
+동일한 결과를 다시 얻으려면 `schema.sql`과 `data.sql`을 먼저 재실행한다.
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot < schema.sql
+docker exec -i cafe-mysql mysql -uroot -proot < data.sql
+```
+
+### 5. CLI로 직접 조회할 때
 
 ```bash
 docker exec -it cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 cafe_order
@@ -66,8 +85,7 @@ docker exec -it cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 c
 
 ![ERD](./docs/erd.png)
 
-* 정의 파일: [`docs/schema.dbml`](./docs/schema.dbml)
-* 다이어그램 도구: dbdiagram.io
+정의 파일: [`docs/schema.dbml`](./docs/schema.dbml)
 
 ### 관계
 
@@ -118,6 +136,78 @@ docker exec -it cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 c
 
 가격 인상은 아메리카노를 3500원에서 4000원으로 올린 것으로 설정했다.
 인상 이전 주문 3건에는 `unit_price`가 3500으로 남아 있어, 단가를 스냅샷으로 저장한 이유가 데이터로 확인된다.
+
+---
+
+## 쿼리
+
+실행 결과: [`results/queries_output.txt`](./results/queries_output.txt)
+
+| 범주    | 쿼리          | 내용                                       |
+| ----- | ----------- | ---------------------------------------- |
+| 기본 조회 | Q01         | 6000원 이상 상품을 가격 내림차순으로 조회                |
+|       | Q02         | 품절 상품 조회                                 |
+|       | Q03         | 최근 주문 5건 (`ORDER BY` + `LIMIT`)          |
+|       | Q04         | 2026년 7월 주문 조회                           |
+| 조인    | Q05         | [INNER] 회원 주문 내역                         |
+|       | Q06         | [INNER] 주문 상세 (3개 테이블 조인)                |
+|       | Q07         | [LEFT] 회원별 주문 건수 (주문 0건 회원 포함)           |
+|       | Q08         | [LEFT] 판매 이력이 없는 상품                      |
+| 집계    | Q09         | 상품별 판매 수량과 매출 (`SUM` + `GROUP BY`)       |
+|       | Q10         | 월별 주문 건수와 매출 (`COUNT DISTINCT` + `SUM`)  |
+|       | Q11         | 분류별 상품 수와 평균 가격 (`COUNT` + `AVG`)        |
+| 서브쿼리  | Q12         | 평균 주문 금액을 초과한 주문                         |
+| 수정/삭제 | Q13         | 배송 완료 주문의 상태 갱신 (`UPDATE`)               |
+|       | Q14         | 취소 주문 삭제 (`DELETE`, CASCADE 동작 확인)       |
+| 인덱스   | Q15         | `orders.ordered_at` 인덱스 생성과 `EXPLAIN` 비교 |
+
+### 쿼리 작성 시 확인한 것
+
+**`COUNT(*)`와 `COUNT(컬럼)`의 차이 (Q07)**
+
+`COUNT(*)`는 행의 개수를 세고, `COUNT(o.id)`는 그 컬럼이 NULL이 아닌 행만 센다.
+LEFT JOIN에서 매칭되는 주문이 없으면 `o.id`가 NULL인 행이 하나 생기므로,
+`COUNT(*)`를 쓰면 주문이 0건인 회원이 1건으로 집계된다.
+
+**DATETIME의 범위 조건 (Q04)**
+
+`ordered_at`이 DATETIME이므로 `<= '2026-07-31'`로 비교하면
+7월 31일 00시 이후에 발생한 주문이 누락된다. `< '2026-08-01'`로 잡아야 한다.
+
+**조인 후의 건수 집계 (Q10)**
+
+`orders`와 `order_item`을 조인하면 주문 1건이 항목 수만큼 늘어난다.
+따라서 주문 건수는 `COUNT(DISTINCT o.id)`로 세야 한다.
+
+**매출 계산에 사용할 가격 (Q09)**
+
+`product.price`로 계산하면 가격이 인상된 상품의 과거 매출까지 현재가로 바뀐다.
+`order_item.unit_price`를 사용해야 주문 시점의 실제 매출이 나온다.
+
+### 인덱스 적용 결과 (Q15)
+
+`orders.ordered_at`은 기간별 조회와 월별 집계에서 항상 조건으로 사용되지만,
+FK 컬럼과 달리 인덱스가 자동 생성되지 않는다.
+
+`EXPLAIN` 결과는 다음과 같이 변했다.
+
+| 항목         | 인덱스 생성 전    | 인덱스 생성 후                |
+| ---------- | ----------- | ----------------------- |
+| `type`     | ALL (전체 스캔) | range (범위 스캔)           |
+| `key`      | NULL        | `idx_orders_ordered_at` |
+| `rows`     | 11          | 4                       |
+| `filtered` | 11.11%      | 100%                    |
+
+`rows`는 실제로 읽은 행 수가 아니라, 옵티마이저가 통계 정보를 바탕으로
+검사할 것이라 **예상한** 행 수다. `filtered`도 그중 조건을 만족할 것으로
+예상되는 비율이며, 두 값 모두 추정치이므로 실제와 다를 수 있다.
+
+추정 기준으로 보면 인덱스 이전에는 테이블 전체인 11행을 검사하고 그중 약 11%만
+조건에 맞을 것으로 예상했지만, 인덱스 이후에는 조건에 해당하는 4행만 검사할 것으로
+예상한다. 즉 불필요하게 읽는 행이 줄어든다.
+
+반대로 `status`나 `order_type`처럼 값의 종류가 적은 컬럼은
+인덱스를 만들어도 걸러지는 행이 적어 효과가 크지 않다.
 
 ---
 
@@ -281,7 +371,7 @@ UTF-8로 저장된 파일을 서버가 latin1로 해석한 뒤 utf8mb4로 변환
 
 ### 해결
 
-`schema.sql`과 `data.sql` 첫 줄에 `SET NAMES utf8mb4;`를 추가했다.
+`schema.sql`, `data.sql`, `queries.sql` 첫 줄에 `SET NAMES utf8mb4;`를 추가했다.
 
 ```sql
 SET NAMES utf8mb4;
@@ -295,9 +385,9 @@ CLI 옵션(`--default-character-set=utf8mb4`) 대신 SQL 파일에 명시한 이
 
 ---
 
-## MySQL 전용 문법
+## MySQL 전용 문법 및 함수
 
-표준 SQL 범위를 벗어난 문법은 SQL 파일에 주석으로 표시했다.
+표준 SQL 범위를 벗어난 문법과 함수는 SQL 파일에 주석으로 표시했다.
 
 | 문법                               | 사용처                    |
 | -------------------------------- | ---------------------- |
@@ -305,6 +395,7 @@ CLI 옵션(`--default-character-set=utf8mb4`) 대신 SQL 파일에 명시한 이
 | `ENUM(...)`                      | 상태/분류/옵션 컬럼            |
 | `BOOLEAN`                        | `product.is_sold_out`  |
 | `ON UPDATE CURRENT_TIMESTAMP`    | `orders.updated_at`    |
+| `DATE_FORMAT()`                  | Q10 월별 집계                  |
 | `SET NAMES`                      | `schema.sql`, `data.sql` 첫 줄 |
 | `ENGINE` / `CHARSET` / `COMMENT` | 모든 테이블                 |
 
@@ -327,19 +418,9 @@ ENUM의 선언 순서는 상태 진행 순서에 맞췄다. MySQL에서 ENUM은 
 │   └── double_encoded.png	# 문자셋 트러블슈팅
 ├── results/
 │   ├── run_schema.png		# 스키마 생성 결과
-│   └── run_data_1~5.png	# 테이블별 데이터 입력 결과
-└── sql/
-    ├── schema.sql		# 스키마 생성
-    └── data.sql		# 샘플 데이터
-```
-
-현재 단계에서는 **스키마 설계, ERD 작성, 샘플 데이터 입력까지 완료**한 상태다.
-
-추후 쿼리 작성이 완료되면 다음 파일을 추가한다.
-
-```text
-sql/
+│   ├── run_data_1~5.png	# 테이블별 데이터 입력 결과
+│   └── queries_output.txt	# 쿼리 15개 실행 결과
+├── schema.sql		# 스키마 생성
+├── data.sql		# 샘플 데이터
 └── queries.sql		# 핵심 쿼리 15개
-
-results/		# 쿼리별 실행 결과
 ```
