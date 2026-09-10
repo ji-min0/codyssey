@@ -1,0 +1,426 @@
+## 주제: 카페 주문 DB
+
+SQL만으로 카페 주문 도메인의 데이터 모델을 설계하고, 요구사항을 쿼리로 해결하는 실습이다.
+백엔드 프레임워크와 ORM은 사용하지 않는다.
+
+---
+
+## 개발 환경
+
+| 항목             | 값                                  |
+| -------------- | ---------------------------------- |
+| DBMS           | MySQL 8.0.46                       |
+| Storage Engine | InnoDB                             |
+| Character Set  | utf8mb4 (`utf8mb4_unicode_ci`)     |
+| 실행 환경          | Docker (OrbStack)                  |
+| 클라이언트          | VSCode MySQL Extension / mysql CLI |
+
+InnoDB를 명시한 이유는 MyISAM에서는 FK 문법이 무시되어 참조 무결성이 동작하지 않기 때문이다.
+
+`CHECK` 제약은 MySQL 8.0.16부터 실제로 검사되며, 그 이전 버전에서는 구문이 허용되더라도 제약이 적용되지 않는다.
+
+---
+
+## 실행 방법
+
+### 1. DB 컨테이너 실행
+
+```bash
+docker run -d \
+  --name cafe-mysql \
+  -e MYSQL_ROOT_PASSWORD=root \
+  -p 3306:3306 \
+  -v cafe-mysql-data:/var/lib/mysql \
+  mysql:8.0
+```
+
+### 2. 스키마 생성
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot < schema.sql
+```
+
+`schema.sql`은 기존 테이블을 먼저 삭제하므로 여러 번 실행해도 동일한 스키마를 구성할 수 있다.
+
+![스키마 생성](./results/run_schema.png)
+
+### 3. 샘플 데이터 입력
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot < data.sql
+```
+
+실행 결과로 각 테이블의 행 수가 출력된다.
+
+### 4. 쿼리 실행
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 \
+  < queries.sql > results/queries_output.txt 2>&1
+```
+
+`queries.sql`의 Q13(UPDATE)과 Q14(DELETE)는 데이터를 변경하므로, 이 파일은 연속으로 두 번 실행하면 첫 실행과 결과가 달라진다.
+
+* Q14가 취소 주문을 삭제하므로, 재실행 시 Q09/Q10/Q12의 매출 집계에서 취소 주문이 처음부터 존재하지 않는 상태가 된다.
+* Q15의 `CREATE INDEX`는 인덱스가 이미 존재하여 `Duplicate key name` 오류가 발생한다.
+
+동일한 결과를 다시 얻으려면 `schema.sql`과 `data.sql`을 먼저 재실행한다.
+
+```bash
+docker exec -i cafe-mysql mysql -uroot -proot < schema.sql
+docker exec -i cafe-mysql mysql -uroot -proot < data.sql
+```
+
+### 5. CLI로 직접 조회할 때
+
+```bash
+docker exec -it cafe-mysql mysql -uroot -proot --default-character-set=utf8mb4 cafe_order
+```
+
+`--default-character-set` 옵션이 필요한 이유는 아래 문자셋 트러블슈팅 항목에 정리했다.
+
+---
+
+## ERD
+
+![ERD](./docs/erd.png)
+
+정의 파일: [`docs/schema.dbml`](./docs/schema.dbml)
+
+### 관계
+
+| 관계                     |  카디널리티 | ON DELETE | 근거                                                 |
+| ---------------------- | -----: | --------- | -------------------------------------------------- |
+| `customer → orders`    |    1:N | SET NULL  | 회원이 탈퇴해도 주문 기록과 매출은 남아야 함                          |
+| `orders → order_item`  |    1:N | CASCADE   | 주문이 삭제되면 항목도 존재 이유가 없음                             |
+| `product → order_item` |    1:N | RESTRICT  | 판매된 상품을 지우면 과거 주문을 설명할 수 없음                        |
+| `orders → delivery`    | 1:0..1 | CASCADE   | 주문 1건당 배달 정보는 최대 1건이며, 배달 주문이 아닌 경우 배달 정보가 존재하지 않음 |
+
+`ON UPDATE`는 지정하지 않았다. 이 설계에서는 AUTO_INCREMENT PK를 식별자로 사용하고 애플리케이션에서 PK를 변경하지 않도록 하므로 `ON UPDATE CASCADE`가 필요한 상황이 없다. 불필요한 옵션을 추가하기보다 현재 도메인에서 필요한 삭제 정책만 명시했다.
+
+---
+
+## 테이블
+
+| 테이블          | 역할                                              |
+| ------------ | ----------------------------------------------- |
+| `customer`   | 회원. 비회원은 저장하지 않고 `orders.customer_id`를 NULL로 둔다 |
+| `product`    | 음료/디저트 공통 상품 정보                                 |
+| `orders`     | 주문 헤더. 주문 전체에 공통인 정보만 저장한다                      |
+| `order_item` | 주문 항목. 항목마다 달라지는 정보를 저장한다                       |
+| `delivery`   | 배달 주문의 배송 정보를 저장한다                              |
+
+---
+
+## 샘플 데이터
+
+| 테이블          | 행 수 | 결과 캡처                                          |
+| ------------ | --: | ---------------------------------------------- |
+| `customer`   |  10 | [run_data_5.png](./results/run_data_5.png)     |
+| `product`    |  10 | [run_data_2.png](./results/run_data_2.png)     |
+| `orders`     |  12 | [run_data_3.png](./results/run_data_3.png)     |
+| `order_item` |  20 | [run_data_4.png](./results/run_data_4.png)     |
+| `delivery`   |  10 | [run_data_1.png](./results/run_data_1.png)     |
+
+### 쿼리 실습을 위해 의도적으로 포함한 데이터
+
+| 데이터                        | 목적                                            |
+| -------------------------- | --------------------------------------------- |
+| 주문 이력이 없는 회원 1명 (신예린)      | LEFT JOIN / 서브쿼리로 "주문한 적 없는 회원" 조회            |
+| 판매 이력이 없는 상품 1개 (블루베리스무디)  | LEFT JOIN으로 "팔린 적 없는 상품" 조회                   |
+| 비회원 주문 1건                  | `customer_id IS NULL` 처리와 `COUNT` 함수의 NULL 취급 |
+| 취소 주문 1건                   | 매출 집계에서 제외해야 하는 데이터                           |
+| 2026-08-01 아메리카노 가격 인상     | `unit_price`와 `product.price`가 달라지는 상황        |
+
+`orders`의 `order_type`이 DELIVERY인 주문은 10건이며, `delivery`는 그 10건에 대해서만 생성된다.
+
+가격 인상은 아메리카노를 3500원에서 4000원으로 올린 것으로 설정했다.
+인상 이전 주문 3건에는 `unit_price`가 3500으로 남아 있어, 단가를 스냅샷으로 저장한 이유가 데이터로 확인된다.
+
+---
+
+## 쿼리
+
+실행 결과: [`results/queries_output.txt`](./results/queries_output.txt)
+
+| 범주    | 쿼리          | 내용                                       |
+| ----- | ----------- | ---------------------------------------- |
+| 기본 조회 | Q01         | 6000원 이상 상품을 가격 내림차순으로 조회                |
+|       | Q02         | 품절 상품 조회                                 |
+|       | Q03         | 최근 주문 5건 (`ORDER BY` + `LIMIT`)          |
+|       | Q04         | 2026년 7월 주문 조회                           |
+| 조인    | Q05         | [INNER] 회원 주문 내역                         |
+|       | Q06         | [INNER] 주문 상세 (3개 테이블 조인)                |
+|       | Q07         | [LEFT] 회원별 주문 건수 (주문 0건 회원 포함)           |
+|       | Q08         | [LEFT] 판매 이력이 없는 상품                      |
+| 집계    | Q09         | 상품별 판매 수량과 매출 (`SUM` + `GROUP BY`)       |
+|       | Q10         | 월별 주문 건수와 매출 (`COUNT DISTINCT` + `SUM`)  |
+|       | Q11         | 분류별 상품 수와 평균 가격 (`COUNT` + `AVG`)        |
+| 서브쿼리  | Q12         | 평균 주문 금액을 초과한 주문                         |
+| 수정/삭제 | Q13         | 배송 완료 주문의 상태 갱신 (`UPDATE`)               |
+|       | Q14         | 취소 주문 삭제 (`DELETE`, CASCADE 동작 확인)       |
+| 인덱스   | Q15         | `orders.ordered_at` 인덱스 생성과 `EXPLAIN` 비교 |
+
+### 쿼리 작성 시 확인한 것
+
+**`COUNT(*)`와 `COUNT(컬럼)`의 차이 (Q07)**
+
+`COUNT(*)`는 행의 개수를 세고, `COUNT(o.id)`는 그 컬럼이 NULL이 아닌 행만 센다.
+LEFT JOIN에서 매칭되는 주문이 없으면 `o.id`가 NULL인 행이 하나 생기므로,
+`COUNT(*)`를 쓰면 주문이 0건인 회원이 1건으로 집계된다.
+
+**DATETIME의 범위 조건 (Q04)**
+
+`ordered_at`이 DATETIME이므로 `<= '2026-07-31'`로 비교하면
+7월 31일 00시 이후에 발생한 주문이 누락된다. `< '2026-08-01'`로 잡아야 한다.
+
+**조인 후의 건수 집계 (Q10)**
+
+`orders`와 `order_item`을 조인하면 주문 1건이 항목 수만큼 늘어난다.
+따라서 주문 건수는 `COUNT(DISTINCT o.id)`로 세야 한다.
+
+**매출 계산에 사용할 가격 (Q09)**
+
+`product.price`로 계산하면 가격이 인상된 상품의 과거 매출까지 현재가로 바뀐다.
+`order_item.unit_price`를 사용해야 주문 시점의 실제 매출이 나온다.
+
+### 인덱스 적용 결과 (Q15)
+
+`orders.ordered_at`은 기간별 조회와 월별 집계에서 항상 조건으로 사용되지만,
+FK 컬럼과 달리 인덱스가 자동 생성되지 않는다.
+
+`EXPLAIN` 결과는 다음과 같이 변했다.
+
+| 항목         | 인덱스 생성 전    | 인덱스 생성 후                |
+| ---------- | ----------- | ----------------------- |
+| `type`     | ALL (전체 스캔) | range (범위 스캔)           |
+| `key`      | NULL        | `idx_orders_ordered_at` |
+| `rows`     | 11          | 4                       |
+| `filtered` | 11.11%      | 100%                    |
+
+`rows`는 실제로 읽은 행 수가 아니라, 옵티마이저가 통계 정보를 바탕으로
+검사할 것이라 **예상한** 행 수다. `filtered`도 그중 조건을 만족할 것으로
+예상되는 비율이며, 두 값 모두 추정치이므로 실제와 다를 수 있다.
+
+추정 기준으로 보면 인덱스 이전에는 테이블 전체인 11행을 검사하고 그중 약 11%만
+조건에 맞을 것으로 예상했지만, 인덱스 이후에는 조건에 해당하는 4행만 검사할 것으로
+예상한다. 즉 불필요하게 읽는 행이 줄어든다.
+
+반대로 `status`나 `order_type`처럼 값의 종류가 적은 컬럼은
+인덱스를 만들어도 걸러지는 행이 적어 효과가 크지 않다.
+
+---
+
+## 설계 결정
+
+### 계산으로 나오는 값은 저장하지 않는다
+
+`orders`에 총액 컬럼을 두지 않고 `SUM(quantity * unit_price)`로 계산한다.
+
+총액을 저장하면 `order_item`이 수정될 때 함께 갱신해야 하고, 갱신이 누락되어도 데이터가 어긋날 수 있다.
+
+같은 이유로 `customer`에 누적 주문 횟수를, `product`에 총 판매량을 저장하지 않았다.
+
+배달비나 할인처럼 `order_item`만으로 계산할 수 없는 금액이 추가된다면 별도로 저장할 근거가 생긴다.
+
+### `unit_price`는 의도적으로 중복 저장한다
+
+`product.price`는 **현재 판매 가격**, `order_item.unit_price`는 **주문 당시 실제 판매 가격**을 의미한다.
+
+주문 항목의 금액을 현재 `product.price`와 JOIN하여 계산하면 가격표가 변경되는 순간 과거 주문의 금액까지 변경된다.
+
+따라서 주문 시점의 가격을 `order_item`에 저장하여 과거 주문 금액을 보존한다. 이는 동일한 사실을 중복 저장하는 것이 아니라 서로 다른 시점의 가격을 저장하는 것이다.
+
+### 비회원은 행을 만들지 않는다
+
+`customer`는 회원만 저장한다.
+
+따라서 회원의 `joined_at`은 항상 존재하며 `NOT NULL`로 둘 수 있다.
+
+비회원 주문은 `orders.customer_id`를 `NULL`로 저장한다.
+
+FK는 NULL을 허용해도 참조 무결성이 깨지지 않는다. 값이 있으면 반드시 존재하는 회원을 참조해야 하고, NULL이면 회원을 참조하지 않는 주문으로 취급한다.
+
+### 주문 상태와 배송 상태를 분리한다
+
+`orders.status`는 주문 처리 상태를 담당한다.
+
+```text
+PENDING → PREPARING → COMPLETED
+                     ↘ CANCELLED
+```
+
+`delivery.status`는 배송 진행 상태만 담당한다.
+
+```text
+WAITING → DELIVERING → DELIVERED
+```
+
+두 상태를 하나로 합치지 않고 분리함으로써 주문 처리와 배송 진행이라는 서로 다른 상태를 독립적으로 표현할 수 있다.
+
+취소된 주문을 DELETE하지 않고 상태로 관리하는 이유는 주문 기록을 보존하여 취소율 등의 통계에 활용할 수 있도록 하기 위해서다.
+
+### 음료와 디저트를 한 테이블에 둔다
+
+초안에서는 `product` / `drink` / `dessert` / `drink_size` / `drink_temperature`로 분리하는 방식을 고려했다.
+
+하지만 과제에서 정규화 이론을 과도하게 깊게 다루지 않고 자연스러운 관계와 쿼리에 집중하도록 요구하고 있으므로, 음료와 디저트의 공통 상품 정보를 `product` 하나로 관리한다.
+
+대신 `type`과 `category`의 유효한 조합은 `CHECK` 제약으로 DB에서 강제한다.
+
+```text
+DRINK
+ ├─ COFFEE
+ └─ NON_COFFEE
+
+DESSERT
+ ├─ WHOLE_CAKE
+ ├─ SLICE_CAKE
+ ├─ BAKED_GOODS
+ └─ BREAD
+```
+
+---
+
+## DB 제약으로 강제하지 않는 비즈니스 규칙
+
+DB의 제약 조건으로 데이터 구조와 기본적인 참조 무결성을 보장하되, 모든 비즈니스 규칙을 DB에 구현하지는 않았다.
+
+### DB에서 강제하는 것
+
+| 제약       | 대상                                                                                        |
+| -------- | ----------------------------------------------------------------------------------------- |
+| PK       | 모든 테이블                                                                                    |
+| FK       | `orders.customer_id`, `order_item.order_id`, `order_item.product_id`, `delivery.order_id` |
+| UNIQUE   | `customer.phone`, `product.name`, `delivery.order_id`                                     |
+| NOT NULL | 각 테이블의 필수 컬럼                                                                              |
+| CHECK    | `product`의 type/category 조합, `price >= 0`, `quantity > 0`, `unit_price >= 0`              |
+| ENUM     | 상태, 분류, 사이즈, 온도 등의 허용 값                                                                   |
+
+### DB에서 강제하지 않는 규칙
+
+#### 상품별 제공 사이즈/온도
+
+`order_item.size`와 `order_item.temperature` 자체의 값 종류는 ENUM으로 DB에서 제한한다.
+
+하지만 **특정 상품이 어떤 사이즈와 온도를 제공하는지**는 상품마다 다를 수 있다.
+
+예를 들어 어떤 음료는 `REGULAR/LARGE/MAX`와 `ICE/HOT`을 모두 지원하고, 다른 음료는 `REGULAR/HOT`만 지원할 수 있다.
+
+이 규칙까지 DB에서 강제하려면 별도의 옵션 테이블과 관계를 추가해야 한다. 현재 과제에서는 스키마 복잡도를 늘리는 대신 해당 규칙을 비즈니스 로직에서 검증하는 것으로 두었다.
+
+#### `DELIVERY` 주문에만 `delivery` 생성
+
+`delivery.order_id`가 참조하는 주문의 `order_type`이 `DELIVERY`인지 여부는 단순한 `CHECK` 제약만으로는 검사할 수 없다.
+
+복합 PK `(id, order_type)`와 복합 FK를 사용하면 DB에서 이 규칙까지 강제할 수 있다.
+
+하지만 `order_type`은 주문 자체를 식별하기 위한 값이 아니라 주문의 속성이므로 이를 PK와 FK 구조에 포함시키면 참조 구조와 쿼리가 복잡해진다.
+
+따라서 현재 설계에서는 주문의 식별자를 단순한 `id`로 유지하고, `DELIVERY` 여부는 비즈니스 로직에서 검증하는 것으로 결정했다.
+
+즉, **DB로 강제할 수 없어서 제외한 것이 아니라, 강제할 수 있는 방법과 그에 따른 복잡도를 고려하여 현재 범위에서는 적용하지 않은 것이다.**
+
+#### 전화번호 형식
+
+`phone`의 형식은 입력 방식에 따라 유효한 표현이 여러 가지일 수 있다.
+
+따라서 현재 스키마에서는 문자열의 길이와 NULL 여부 정도만 관리하고, 구체적인 형식 검증은 입력을 처리하는 계층에서 담당하는 것으로 둔다.
+
+#### 디저트 항목의 `size` / `temperature`
+
+`size`와 `temperature`는 음료에만 의미가 있는 속성이다.
+
+현재 구조에서는 디저트 주문에 해당 컬럼이 `NULL`이어야 한다는 규칙을 별도로 강제하지 않는다.
+
+이 규칙을 DB에서 엄격하게 강제하려면 상품 종류와 주문 항목을 함께 검사해야 하므로 추가적인 관계 설계가 필요하다. 현재 과제에서는 이를 비즈니스 규칙으로 분류한다.
+
+---
+
+## 문자셋 트러블슈팅
+
+### 증상
+
+`data.sql`을 실행한 뒤 조회하면 한글이 아래처럼 깨져서 저장되어 있었다.
+
+```text
+신예린  →  ì‹ ì˜ˆë¦°
+```
+
+![이중 인코딩](./docs/double_encoded.png)
+
+### 원인
+
+UTF-8로 저장된 파일을 서버가 latin1로 해석한 뒤 utf8mb4로 변환하면서 발생한 **이중 인코딩(double encoding)** 이다.
+
+`SHOW VARIABLES LIKE 'character_set%'` 결과를 보면 저장 쪽과 전송 쪽이 서로 다른 문자셋을 사용하고 있었다.
+
+| 변수                         | 값       | 역할              |
+| -------------------------- | ------- | --------------- |
+| `character_set_database`   | utf8mb4 | 저장              |
+| `character_set_server`     | utf8mb4 | 저장              |
+| `character_set_client`     | latin1  | 클라이언트가 보내는 SQL문 |
+| `character_set_connection` | latin1  | 서버가 처리할 때의 인코딩  |
+| `character_set_results`    | latin1  | 서버가 돌려주는 결과     |
+
+`CREATE DATABASE`와 `DEFAULT CHARSET`은 **저장 쪽** 설정이므로 정상이었다.
+문제는 접속할 때마다 클라이언트가 결정하는 **전송 쪽** 세 변수였고, 이 값들은 스키마 정의의 영향을 받지 않는다.
+
+서버 입장에서는 "latin1로 들어온 바이트"를 utf8mb4로 정직하게 변환한 것이며,
+그 바이트가 사실은 UTF-8이었다는 점이 문제였다.
+
+### 해결
+
+`schema.sql`, `data.sql`, `queries.sql` 첫 줄에 `SET NAMES utf8mb4;`를 추가했다.
+
+```sql
+SET NAMES utf8mb4;
+```
+
+이 한 줄은 `character_set_client`, `character_set_connection`, `character_set_results`를 한 번에 utf8mb4로 설정한다.
+
+CLI 옵션(`--default-character-set=utf8mb4`) 대신 SQL 파일에 명시한 이유는, 어떤 클라이언트로 실행하더라도 동일하게 동작하도록 하기 위해서다.
+
+다만 `SET NAMES`는 세션 단위로 적용되므로, `-e` 옵션으로 쿼리를 직접 실행하거나 CLI로 접속해 조회할 때는 `--default-character-set=utf8mb4`를 함께 지정해야 한다.
+
+---
+
+## MySQL 전용 문법 및 함수
+
+표준 SQL 범위를 벗어난 문법과 함수는 SQL 파일에 주석으로 표시했다.
+
+| 문법                               | 사용처                    |
+| -------------------------------- | ---------------------- |
+| `AUTO_INCREMENT`                 | 모든 테이블의 PK             |
+| `ENUM(...)`                      | 상태/분류/옵션 컬럼            |
+| `BOOLEAN`                        | `product.is_sold_out`  |
+| `ON UPDATE CURRENT_TIMESTAMP`    | `orders.updated_at`    |
+| `DATE_FORMAT()`                  | Q10 월별 집계                  |
+| `SET NAMES`                      | `schema.sql`, `data.sql` 첫 줄 |
+| `ENGINE` / `CHARSET` / `COMMENT` | 모든 테이블                 |
+
+`BOOLEAN`은 MySQL에서 `TINYINT(1)`의 별칭으로 동작한다.
+
+`ENUM`은 허용되는 값의 종류가 명확하고 변경 빈도가 낮은 상태/분류/옵션 값에 사용했다. 값이 추가되면 `ALTER TABLE`이 필요하므로 변경이 잦은 데이터에는 적합하지 않다.
+
+ENUM의 선언 순서는 상태 진행 순서에 맞췄다. MySQL에서 ENUM은 선언 순서가 곧 정렬 순서가 되므로, `ORDER BY status`의 결과가 알파벳순이 아니라 실제 상태 흐름과 일치하게 된다.
+
+---
+
+## 제출물
+
+```text
+.
+├── README.md
+├── docs/
+│   ├── schema.dbml
+│   ├── erd.png
+│   └── double_encoded.png	# 문자셋 트러블슈팅
+├── results/
+│   ├── run_schema.png		# 스키마 생성 결과
+│   ├── run_data_1~5.png	# 테이블별 데이터 입력 결과
+│   └── queries_output.txt	# 쿼리 15개 실행 결과
+├── schema.sql		# 스키마 생성
+├── data.sql		# 샘플 데이터
+└── queries.sql		# 핵심 쿼리 15개
+```
