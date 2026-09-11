@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Codyssey B3-1 - VPC + Public Subnet + IGW + EC2(Ubuntu, Nginx)
+  Region: ap-northeast-2 (Seoul)
+
+# 배포 시 --parameters로 받는 값
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName  # 계정에 실제 존재하는 키페어인지 배포 전 검사
+    Description: SSH KeyPair Name
+
+  MyIp:
+    Type: String
+    Description: SSH(22) - MyIp (CIDR)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$' # /32 누락 방지
+    ConstraintDescription: x.x.x.x/32
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t2.micro, t3.micro]
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id> # 배포 시점에 최신 AMI ID로 치환
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Ubuntu 24.04 LTS latest AMI (SSM public parameter)
+
+Resources:
+  # 네트워크
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16  # 격리된 사설 네트워크 대역
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway # InternetGateway 생성만으로는 미연결
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment  # IGW를 VPC에 연결
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""] # 리전의 첫 번째 가용영역(AZ)
+      MapPublicIpOnLaunch: true # 이 서브넷에 뜨는 인스턴스에 퍼블릭 IP 자동 할당
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet"
+
+  # 서브넷이 퍼블릭인지는 이름이 아니라 아래 라우팅(0.0.0.0/0 → IGW)으로 결정됨
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-rt"
+
+  DefaultRouteToIGW:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment # IGW가 VPC에 붙은 뒤에 경로 생성
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0 # VPC 밖으로 가는 모든 트래픽은
+      GatewayId: !Ref InternetGateway # IGW로 보냄
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation # 누락 시 기본 RT(local만)를 써서 인터넷 불가
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # 접근 제어
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup # 인스턴스 단위 방화벽 (stateful: 응답 트래픽 자동 허용)
+    Properties:
+      GroupDescription: Allow HTTP from anywhere, SSH from my IP only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - Description: HTTP from anywhere
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: SSH from my IP only
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref MyIp
+      # 아웃바운드는 기본값(전체 허용) 유지
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-web-sg"
+
+  # 컴퓨트
+  WebServer:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRouteToIGW  # 인터넷 경로가 생긴 뒤 부팅해야 UserData의 apt가 성공
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName # 공개키가 ubuntu 계정의 authorized_keys에 등록됨
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1 # Ubuntu 루트 볼륨
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            DeleteOnTermination: true # 인스턴스 종료 시 EBS도 같이 삭제
+      UserData: # 첫 부팅 시 root로 1회 실행, 로그: /var/log/cloud-init-output.log
+        Fn::Base64: |
+          #!/bin/bash
+          # 실패 시 즉시 중단 + 실행 명령 로그 출력
+          set -euxo pipefail
+
+          # 설치 중 대화형 프롬프트 차단
+          export DEBIAN_FRONTEND=noninteractive
+
+          apt-get update -y
+          apt-get install -y nginx
+
+          cat > /etc/nginx/sites-available/default <<'EOF'
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+              server_name _;
+
+              root /var/www/html;
+              index index.html index.nginx-debian.html;
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+
+              # 정확히 /health 요청에만 200 "OK" 반환 (외부 검증 B)
+              location = /health {
+                  default_type text/plain;
+                  return 200 "OK\n";
+              }
+          }
+          EOF
+
+          nginx -t
+          systemctl enable nginx
+          systemctl restart nginx
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-web"
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+  PublicSubnetId:
+    Value: !Ref PublicSubnet
+  SecurityGroupId:
+    Value: !Ref WebSecurityGroup
+  InstanceId:
+    Value: !Ref WebServer
+  PublicIp:
+    Value: !GetAtt WebServer.PublicIp
+  WebURL:
+    Value: !Sub "http://${WebServer.PublicIp}"
+  HealthURL:
+    Value: !Sub "http://${WebServer.PublicIp}/health"
+  SSHCommand:
+    Value: !Sub "ssh -i ~/.ssh/${KeyName}.pem ubuntu@${WebServer.PublicIp}"
