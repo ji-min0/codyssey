@@ -155,8 +155,14 @@ sudo usermod -aG agent-common            agent-test
 
 ```
 $ id agent-admin; id agent-dev; id agent-test
-<!-- TODO: 출력 붙여넣기 -->
+uid=1000(agent-admin) gid=1002(agent-admin) groups=1002(agent-admin),1000(agent-common),1001(agent-core)
+uid=1001(agent-dev) gid=1003(agent-dev) groups=1003(agent-dev),1000(agent-common),1001(agent-core)
+uid=1002(agent-test) gid=1004(agent-test) groups=1004(agent-test),1000(agent-common)
 ```
+
+agent-admin·agent-dev는 agent-common과 agent-core 모두에, agent-test는 agent-common에만 속해 있습니다.
+
+![id 확인](docs/screenshots/05-id-groups.png)
 
 ---
 
@@ -224,17 +230,70 @@ drwxrws---+ 1 agent-admin agent-common      16 Oct  4 16:51 upload_files
 
 ```
 $ sudo getfacl $AGENT_HOME/upload_files $AGENT_HOME/api_keys /var/log/agent-app
-<!-- TODO: 출력 붙여넣기 -->
+# file: home/agent-admin/agent-app/upload_files
+# owner: agent-admin
+# group: agent-common
+# flags: -s-
+user::rwx
+group::rwx
+group:agent-common:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:group:agent-common:rwx
+default:mask::rwx
+default:other::---
+
+# file: home/agent-admin/agent-app/api_keys
+# owner: agent-admin
+# group: agent-core
+# flags: -s-
+user::rwx
+group::rwx
+group:agent-core:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:group:agent-core:rwx
+default:mask::rwx
+default:other::---
+
+# file: var/log/agent-app
+# owner: agent-admin
+# group: agent-core
+# flags: -s-
+user::rwx
+group::rwx
+group:agent-core:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:group:agent-core:rwx
+default:mask::rwx
+default:other::---
 ```
+
+세 디렉토리 모두 `flags: -s-`(setgid)가 걸려 있고, 지정 그룹에만 `rwx`, 그 외(`other`)는 `---`입니다. `default:` 항목이 있어 새로 생기는 파일에도 같은 권한이 상속됩니다.
+
+![getfacl](docs/screenshots/06-getfacl.png)
 
 **실제 접근 테스트 (agent-test 계정)**
 
 ```
 $ sudo -u agent-test touch $AGENT_HOME/upload_files/test.txt && echo "upload OK"
+upload OK
 $ sudo -u agent-test ls $AGENT_HOME/api_keys
+ls: cannot open directory '/home/agent-admin/agent-app/api_keys': Permission denied
 $ sudo -u agent-test ls /var/log/agent-app
-<!-- TODO: 출력 붙여넣기 (upload OK / Permission denied / Permission denied 기대) -->
+ls: cannot open directory '/var/log/agent-app': Permission denied
 ```
+
+agent-test는 공유 디렉토리에는 파일을 쓸 수 있지만, 보안 디렉토리(api_keys, 로그)에는 접근이 거부됩니다. 설계한 정책이 실제로 적용되었음을 확인했습니다.
+
+![agent-test 접근 테스트](docs/screenshots/07-agent-test-access.png)
 
 권한이 없는 일반 사용자 계정(실습 계정)으로 `bin/`에 접근했을 때도 거부되는 것을 확인했습니다.
 
@@ -396,8 +455,16 @@ exit code: 0
 **앱 중지 시 exit 1**
 
 ```
-<!-- TODO: 출력 붙여넣기 -->
+$ sudo pkill -f agent-app-linux-x86
+$ sudo -iu agent-admin $AGENT_HOME/bin/monitor.sh; echo "exit code: $?"
+===== Agent Monitor 2026-10-04 19:04:24 =====
+[ERROR] Process 'agent-app-linux-x86' is not running
+exit code: 1
 ```
+
+앱 프로세스를 종료한 상태에서는 Health Check 1단계에서 `[ERROR]`를 출력하고 즉시 exit 1로 종료합니다. 이후 단계(포트, 자원 수집, 로그 기록)는 실행되지 않습니다. 테스트 후 앱을 다시 실행했습니다.
+
+![exit 1 테스트](docs/screenshots/08-monitor-exit1.png)
 
 ### 경고와 종료를 나눈 이유
 
