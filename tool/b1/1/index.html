@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <mata name="description" content="코디세이 학습용 포폴 사이트">
+    <title>Jimin | Profile</title>
+    <link rel="stylesheet" href="./css/style.css">
+    <script src="./js/main.js" defer></script>
+    <script src="https://kit.fontawesome.com/2271afb610.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <header id="header">
+        <div class="container">
+            <nav class="navbar" aria-label="메인 내비게이션">
+                <a class="logo" href="#header">jimin <span>|</span> profile</a>
+
+                <button
+                    class="menu-toggle"
+                    id="menu-toggle"
+                    type="button"
+                    aria-label="메뉴 열기"
+                    aria-controls="sidemenu"
+                    aria-expanded="false"
+                >
+                    <i class="fas fa-bars" aria-hidden="true"></i>
+                </button>
+
+                <ul id="sidemenu">
+                    <button class="menu-close" id="menu-close" aria-label="메뉴 닫기">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <li><a href="#header">Home</a></li>
+                    <li><a href="#about">About</a></li>
+                    <li><a href="#skills">Skills</a></li>
+                    <li><a href="#projects">Projects</a></li>
+                    <li><a href="#contact">Contact</a></li>
+                    <li>
+                        <button
+                            class="theme-toggle"
+                            id="theme-toggle"
+                            type="button"
+                            aria-label="라이트 모드로 변경"
+                        >
+                            <i class="fas fa-sun" aria-hidden="true"></i>
+                        </button>
+                    </li>
+                </ul>
+            </nav>
+
+            <div class="header-text reveal">
+                <p>MY PORTFOLIO</p>
+                <h1>Hi, I'm <span>Jimin</span></h1>
+                <p class="hero-description">
+                    코디세이 과제 제출용 포트폴리오 사이트입니다.
+                </p>
+                <div class="hero-buttons">
+                    <a href="#projects" class="btn btn1">View Projects</a>
+                    <a href="#contact" class="btn btn2">Contact Me</a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section id="about" class="section">
+            <div class="container">
+                <div class="row">
+                    <div class="about-col-1 reveal">
+                        <img
+                            src="./images/user.gif"
+                            alt="지민의 프로필 이미지"
+                            loading="lazy"
+                        >
+                    </div>
+
+                    <div class="about-col-2 reveal">
+                        <h2 class="sub-title">About Me</h2>
+
+                        <p class="about-description">
+                            강지민입니다.
+                        </p>
+                        <p class="about-description">
+                            코디세이 AI 올인원 2기 학습 중입니다. 
+                            <br> 이 페이지는 코디세이 학습 내용이 기록되어 있습니다.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="skills" class="section section-alt">
+            <div class="container">
+                <h2 class="sub-title reveal">Skills</h2>
+                <div class="skills-list">
+                    <article class="skill-card reveal">
+                        <i class="fas fa-code" aria-hidden="true"></i>
+                        <h3>프로그래밍 언어</h3>
+                        <p>Python</p>
+                    </article>
+
+                    <article class="skill-card reveal">
+                        <i class="fas fa-laptop-code" aria-hidden="true"></i>
+                        <h3>웹 프레임워크</h3>
+                        <p>Django, FastAPI, Flask</p>
+                    </article>
+
+                    <article class="skill-card reveal">
+                        <i class="fas fa-window-maximize" aria-hidden="true"></i>
+                        <h3>웹 / 클라이언트</h3>
+                        <p>HTML, CSS, JavaScript</p>
+                    </article>
+
+                    <article class="skill-card reveal">
+                        <i class="fas fa-database" aria-hidden="true"></i>
+                        <h3>데이터베이스</h3>
+                        <p>MySQL, PostgreSQL, SQLite, EdgeDB (Gel)</p>
+                    </article>
+
+                    <article class="skill-card reveal">
+                        <i class="fas fa-server" aria-hidden="true"></i>
+                        <h3>운영체제 / 환경</h3>
+                        <p>Linux, Docker, AWS</p>
+                    </article>
+
+                    <article class="skill-card reveal">
+                        <i class="fab fa-github" aria-hidden="true"></i>
+                        <h3>버전 관리 / 협업</h3>
+                        <p>Git, GitHub</p>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section id="projects" class="section">
+            <div class="container">
+                <h2 class="sub-title reveal">My Projects</h2>
+
+                <div
+                    id="projects-status"
+                    class="projects-status"
+                    role="status"
+                    aria-live="polite"
+                >
+                    <p>프로젝트를 불러오는 중...</p>
+                </div>
+
+                <div id="projects-list" class="work-list"></div>
+
+                <a
+                    href="https://github.com/ji-min0?tab=repositories"
+                    class="btn btn1"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    See More <i class="fab fa-github" aria-hidden="true"></i>
+                </a>
+            </div>
+        </section>
+
+        <section id="contact" class="section section-alt">
+            <div class="container">
+                <div class="row contact-row">
+                    <div class="contact-left reveal">
+                        <h2 class="sub-title">Contact Me</h2>
+
+                        <div class="social-icons">
+                            <a
+                                href="https://github.com/ji-min0"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label="GitHub 프로필"
+                            >
+                                <i class="fab fa-github" aria-hidden="true"></i>
+                                GitHub
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="contact-right reveal">
+                        <form id="contact-form" novalidate>
+                            <div class="form-group">
+                                <label for="contact-name">Name</label>
+                                <input
+                                    type="text"
+                                    id="contact-name"
+                                    name="name"
+                                    placeholder="이름을 입력해 주세요."
+                                    autocomplete="name"
+                                    required
+                                    aria-describedby="name-error"
+                                >
+                                <p class="field-error" id="name-error"></p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="contact-email">Email</label>
+                                <input
+                                    type="email"
+                                    id="contact-email"
+                                    name="email"
+                                    placeholder="이메일을 입력해 주세요."
+                                    autocomplete="email"
+                                    required
+                                    aria-describedby="email-error"
+                                >
+                                <p class="field-error" id="email-error"></p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="contact-message">Message</label>
+                                <textarea
+                                    id="contact-message"
+                                    name="message"
+                                    rows="6"
+                                    placeholder="메시지를 입력해 주세요."
+                                    required
+                                    aria-describedby="message-error"
+                                ></textarea>
+                                <p class="field-error" id="message-error"></p>
+                            </div>
+
+                            <button type="submit" class="btn btn2">Submit</button>
+                            <p id="form-status" role="status" aria-live="polite"></p>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="copyright">
+        <div class="container">
+            <p>© 2026 Jimin. My Profile Website</p>
+            <a href="https://github.com/ji-min0">GitHub</a>
+        </div>
+    </footer>
+
+    <button
+        id="scroll-top"
+        class="scroll-top"
+        type="button"
+        aria-label="페이지 맨 위로 이동"
+        hidden
+    >
+        <i class="fas fa-arrow-up" aria-hidden="true"></i>
+    </button>
+</body>
+</html>
