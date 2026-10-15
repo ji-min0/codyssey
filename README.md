@@ -6,7 +6,7 @@
 ## Demo
 
 - GitHub Repository: https://github.com/{깃허브_아이디}/{레포_이름}
-- GitHub Pages: 배포 후 URL 입력
+- GitHub Pages: https://ji-min0.github.io/codyssey/
 
 ## 구현 기능
 
