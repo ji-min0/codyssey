@@ -3,10 +3,8 @@
 개인 소개와 학습 과정, GitHub 프로젝트를 보여 주는 반응형 포트폴리오 웹사이트입니다.
 순수 HTML, CSS, JavaScript를 사용해 구현했습니다.
 
-## Demo
-
-- GitHub Repository: https://github.com/{깃허브_아이디}/{레포_이름}
-- GitHub Pages: https://ji-min0.github.io/codyssey/
+## GitHub Pages
+https://ji-min0.github.io/codyssey/
 
 ## 구현 기능
 
