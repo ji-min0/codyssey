@@ -12,6 +12,28 @@ const formStatus = document.querySelector("#form-status");
 
 const projectApiUrl = "https://api.github.com/users/ji-min0/repos?sort=updated&per_page=100";
 
+const savedTheme = localStorage.getItem("portfolio-theme");
+
+const STATE = {
+    projects: {
+        status: "loading",
+        items: [],
+        error: "",
+    },
+    theme:
+        savedTheme === "light" || savedTheme === "dark"
+            ? savedTheme
+            : "light",
+    form: {
+        status: "",
+        errors: {
+            name: "",
+            email: "",
+            message: "",
+        },
+    },
+};
+
 // 모바일 메뉴
 const menuClose = document.querySelector("#menu-close");
 
@@ -44,16 +66,10 @@ sideMenu.querySelectorAll('a[href^="#"]').forEach((link) => {
 });
 
 // 다크 모드
-const savedTheme = localStorage.getItem("portfolio-theme");
-const initialTheme =
-    savedTheme === "light" || savedTheme === "dark"
-        ? savedTheme
-        : "light";
-
-document.documentElement.dataset.theme = initialTheme;
-
 function updateThemeButton() {
-    const isDark = document.documentElement.dataset.theme === "dark";
+    document.documentElement.dataset.theme = STATE.theme;
+
+    const isDark = STATE.theme === "dark";
 
     themeToggle.innerHTML = isDark
         ? '<i class="fas fa-sun" aria-hidden="true"></i>'
@@ -68,11 +84,9 @@ function updateThemeButton() {
 updateThemeButton();
 
 themeToggle.addEventListener("click", () => {
-    const currentTheme = document.documentElement.dataset.theme;
-    const nextTheme = currentTheme === "dark" ? "light" : "dark";
+    STATE.theme = STATE.theme === "dark" ? "light" : "dark";
 
-    document.documentElement.dataset.theme = nextTheme;
-    localStorage.setItem("portfolio-theme", nextTheme);
+    localStorage.setItem("portfolio-theme", STATE.theme);
 
     updateThemeButton();
 });
@@ -183,36 +197,21 @@ function renderProjects(repositories) {
 }
 
 // GitHub API 상태 관리
-async function loadProjects() {
-    projectsStatus.textContent = "프로젝트를 불러오는 중...";
+function renderProjectState() {
+    projectsStatus.innerHTML = "";
     projectsList.innerHTML = "";
 
-    try {
-        const response = await fetch(projectApiUrl);
+    if (STATE.projects.status === "loading") {
+        projectsStatus.textContent = "프로젝트를 불러오는 중...";
+        return;
+    }
 
-        if (!response.ok) {
-            throw new Error(`GitHub API 요청 실패: ${response.status}`);
-        }
+    if (STATE.projects.status === "empty") {
+        projectsStatus.textContent = "표시할 프로젝트가 없습니다.";
+        return;
+    }
 
-        const repositories = await response.json();
-        const filteredRepositories = repositories.filter((repository) =>
-            repository.name.toLowerCase().startsWith("codyssey")
-        );
-
-        if (!Array.isArray(repositories)) {
-            throw new Error("올바르지 않은 API 응답입니다.");
-        }
-
-        if (filteredRepositories.length === 0) {
-            projectsStatus.textContent = "표시할 프로젝트가 없습니다.";
-            return;
-        }
-
-        renderProjects(filteredRepositories);
-        projectsStatus.textContent = "";
-    } catch (error) {
-        console.error("프로젝트 로딩 실패:", error);
-
+    if (STATE.projects.status === "error") {
         projectsStatus.innerHTML = `
             <p>프로젝트를 불러올 수 없습니다.</p>
             <button class="retry-button" id="retry-projects" type="button">
@@ -223,7 +222,49 @@ async function loadProjects() {
         document
             .querySelector("#retry-projects")
             .addEventListener("click", loadProjects);
+
+        return;
     }
+
+    if (STATE.projects.status === "success") {
+        renderProjects(STATE.projects.items);
+    }
+}
+
+async function loadProjects() {
+    STATE.projects.status = "loading";
+    STATE.projects.items = [];
+    STATE.projects.error = "";
+
+    renderProjectState();
+
+    try {
+        const response = await fetch(projectApiUrl);
+
+        if (!response.ok) {
+            throw new Error(`GitHub API 요청 실패: ${response.status}`);
+        }
+
+        const repositories = await response.json();
+
+        if (!Array.isArray(repositories)) {
+            throw new Error("올바르지 않은 API 응답입니다.");
+        }
+
+        STATE.projects.items = repositories.filter((repository) =>
+            repository.name.toLowerCase().startsWith("codyssey")
+        );
+
+        STATE.projects.status =
+            STATE.projects.items.length > 0 ? "success" : "empty";
+    } catch (error) {
+        console.error("프로젝트 로딩 실패:", error);
+
+        STATE.projects.status = "error";
+        STATE.projects.error = String(error);
+    }
+
+    renderProjectState();
 }
 
 loadProjects();
@@ -235,14 +276,19 @@ const messageInput = document.querySelector("#contact-message");
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function showFieldError(input, message) {
+function renderFieldError(input) {
     const errorElement = document.querySelector(
-        `#${input.id.replace("contact-", "")}-error`
+        `#${input.name}-error`
     );
+    const message = STATE.form.errors[input.name];
 
     errorElement.textContent = message;
     input.classList.toggle("invalid", Boolean(message));
     input.setAttribute("aria-invalid", String(Boolean(message)));
+}
+
+function renderFormStatus() {
+    formStatus.textContent = STATE.form.status;
 }
 
 function validateField(input) {
@@ -251,11 +297,15 @@ function validateField(input) {
 
     if (!value) {
         errorMessage = "필수 입력 항목입니다.";
-    } else if (input === emailInput && !emailPattern.test(value)) {
+    } else if (
+        input === emailInput &&
+        !emailPattern.test(value)
+    ) {
         errorMessage = "올바른 이메일 형식을 입력해 주세요.";
     }
 
-    showFieldError(input, errorMessage);
+    STATE.form.errors[input.name] = errorMessage;
+    renderFieldError(input);
 
     return errorMessage === "";
 }
@@ -265,7 +315,9 @@ const formInputs = [nameInput, emailInput, messageInput];
 formInputs.forEach((input) => {
     input.addEventListener("input", () => {
         validateField(input);
-        formStatus.textContent = "";
+
+        STATE.form.status = "";
+        renderFormStatus();
     });
 });
 
@@ -277,7 +329,8 @@ contactForm.addEventListener("submit", (event) => {
     );
 
     if (validationResults.includes(false)) {
-        formStatus.textContent = "입력 내용을 확인해 주세요.";
+        STATE.form.status = "입력 내용을 확인해 주세요.";
+        renderFormStatus();
 
         const firstInvalidInput = formInputs.find(
             (input) => input.getAttribute("aria-invalid") === "true"
@@ -287,12 +340,13 @@ contactForm.addEventListener("submit", (event) => {
         return;
     }
 
-    formStatus.textContent =
-        "입력 확인이 완료되었습니다.";
+    STATE.form.status = "입력 확인이 완료되었습니다.";
+    renderFormStatus();
 
     contactForm.reset();
 
     formInputs.forEach((input) => {
-        showFieldError(input, "");
+        STATE.form.errors[input.name] = "";
+        renderFieldError(input);
     });
 });
