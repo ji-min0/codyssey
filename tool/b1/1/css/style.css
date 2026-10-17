@@ -130,8 +130,11 @@ ul {
     align-items: center;
     gap: 20px;
     padding: 22px 0;
-    position: sticky;
+    position: fixed;
     top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(90%, var(--container-width));
     z-index: 100;
     transition: background-color var(--transition), padding var(--transition);
 }
