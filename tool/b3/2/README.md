@@ -330,6 +330,49 @@ python3 ai_git_helper.py commit --convention .ai-gitgen.json
 
 알 수 없는 키나 잘못된 정규식이 있으면 실행 전에 오류로 알려줍니다.
 
+#### 컨벤션 적용 전/후 비교
+
+같은 변경(README 추가 커밋의 staged diff)으로 두 번 생성한 실제 결과입니다. (모델: `claude-sonnet-4`)
+
+```bash
+python3 ai_git_helper.py commit                               # 적용 전
+python3 ai_git_helper.py commit --convention .ai-gitgen.json  # 적용 후
+```
+
+**적용 전**
+
+```
+AI 기반 Git 커밋/PR 자동 생성기 README 추가
+
+- AI 기반 Git 커밋 메시지 및 PR 설명 자동 생성 CLI 도구 문서 추가
+- 설치 방법 및 환경변수(.env) 설정 가이드 작성
+- 사용 가능한 AI 모델 목록 및 차감 배수 정보 포함
+- 커밋/PR 생성 기본 사용법 및 고급 옵션 예제 작성
+- 안전 모드, temperature 등 주요 파라미터 설명 추가
+```
+
+**적용 후**
+
+```
+[설정] 컨벤션 파일 적용: .ai-gitgen.json
+           안전 모드 활성화
+           - 마스킹: 사용자 정의 1건, 비밀값(.env) 1건, 비밀값(문자열) 5건, Bearer 토큰 1건, 이메일 2건, 전화번호 2건
+
+docs: AI 기반 Git 커밋/PR 자동 생성기 README 작성
+
+- AI 기반 Git 커밋 메시지 및 PR 설명 자동 생성 CLI 도구 문서 추가
+- 설치 방법, 환경변수 설정, 사용 가능한 모델 목록 작성
+- 기본 사용법 및 고급 옵션(모델 변경, temperature, 안전 모드 등) 설명 추가
+- 파라미터 설명 및 temperature 지원 여부 안내 포함
+```
+
+| 항목 | 적용 전 | 적용 후 |
+|------|---------|---------|
+| 제목 형식 | 타입 없음 | `docs:` 타입 prefix (`title_pattern` 검사 통과) |
+| 어미 | `~추가` | 팀 규칙대로 `~작성` |
+| 안전 모드 | 꺼짐 (diff 원문 전송) | `safe_mode.enabled`로 자동 적용, README 예시 속 키/이메일 등 13건 마스킹 |
+| 본문 | 불릿 5개 | 불릿 4개, 내용은 동일 수준 |
+
 ### 3. 출력 형식 검증 및 후처리
 
 AI 응답은 그대로 출력하지 않고, 아래 규칙으로 검증한 뒤 **후처리**합니다.
