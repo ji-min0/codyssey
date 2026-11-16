@@ -1,0 +1,29 @@
+{
+  "commit": {
+    "title_pattern": "^(feat|fix|docs|refac|chore|init): \\S",
+    "title_recommended": 40,
+    "extra_rules": [
+      "제목은 `<타입>: <한글 설명>` 형식 (스코프 표기 없음)",
+      "타입: feat(기능), fix(버그), docs(문서/스크린샷), refac(리팩토링), chore(파일 이동/설정), init(초기 업로드)",
+      "제목 끝에 마침표를 붙이지 않고 '~추가', '~수정', '~작성'처럼 명사형으로 끝냄",
+      "예: feat: Nginx 기반 컨테이너 이미지 추가 / fix: 상단 navbar 사라지는 오류"
+    ]
+  },
+  "pr": {
+    "title_pattern": "^(feat|fix|docs|refac|chore|init): \\S",
+    "extra_rules": [
+      "PR 제목도 커밋과 같은 `<타입>: <한글 설명>` 형식",
+      "본문 마지막에 '## Checklist' 섹션을 두고 '- [ ] 스크린샷/증빙 첨부', '- [ ] README 반영' 체크박스 포함"
+    ],
+    "required_sections": ["Why", "What", "How to Test", "Checklist"]
+  },
+  "safe_mode": {
+    "enabled": true,
+    "max_files": 8,
+    "max_lines": 150,
+    "extra_patterns": [
+      ["\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", "***MASKED_IP***"],
+      ["copa\\.codyssey\\.kr", "***MASKED_INTERNAL_HOST***"]
+    ]
+  }
+}
