@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 
 try:
     import anthropic
@@ -42,12 +44,26 @@ API_ERROR_HINTS = [
     (anthropic.BadRequestError, "잘못된 요청: -t(0.0~1.0), --max-tokens 값을 확인하세요"),
 ]
 
+SAFE_MODE_DEFAULTS = {"max_files": 10, "max_lines": 200}
+SECRET_NAME = r"\w*(?:password|passwd|secret|token|api_?key)\w*"
+
 # 구체적인 패턴을 먼저 적용해야 마지막 일반 토큰 패턴에 먹히지 않는다.
 SENSITIVE_PATTERNS = [
-    (re.compile(r'password\s*[=:]\s*["\']?[^"\'\s]+["\']?', re.IGNORECASE), "password=***MASKED***"),
-    (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "***MASKED_EMAIL***"),
-    (re.compile(r"sk-[A-Za-z0-9_-]{20,}"), "***MASKED_API_KEY***"),
-    (re.compile(r"[A-Za-z0-9_-]{20,}"), "***MASKED_TOKEN***"),
+    ("개인키", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+     "***MASKED_PRIVATE_KEY***"),
+    ("비밀값(.env)", re.compile(r"(?m)^([+-]?\s*[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[A-Z0-9_]*\s*=\s*)\S+"),
+     r"\1***MASKED***"),
+    ("비밀값(문자열)", re.compile(rf"""(?i)\b({SECRET_NAME}["']?\s*[=:]\s*)(["'])[^"'\n]+\2"""),
+     r"\1\2***MASKED***\2"),
+    ("Bearer 토큰", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{10,}"), "Bearer ***MASKED***"),
+    ("이메일", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "***MASKED_EMAIL***"),
+    ("sk- API Key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "***MASKED_API_KEY***"),
+    ("AWS Access Key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "***MASKED_AWS_KEY***"),
+    ("주민등록번호", re.compile(r"\b\d{6}-[1-4]\d{6}\b"), "***MASKED_RRN***"),
+    ("전화번호", re.compile(r"\b01[016789]-?\d{3,4}-?\d{4}\b"), "***MASKED_PHONE***"),
+    # 숫자와 영문이 섞인 20자 이상만: PermissionDeniedError 같은 긴 코드 이름은 살린다.
+    ("긴 토큰", re.compile(r"(?<![\w-])(?=[A-Za-z_-]*\d)(?=[\d_-]*[A-Za-z])[\w-]{20,}(?![\w-])"),
+     "***MASKED_TOKEN***"),
 ]
 
 
@@ -62,6 +78,8 @@ class Task:
     title_recommended: int = 0  # 0이면 검사 안 함
     required_sections: tuple = ()
     title_body_together: bool = False
+    title_pattern: str = ""
+    extra_rules: tuple = ()
 
 
 COMMIT = Task(
@@ -100,6 +118,28 @@ PR = Task(
 TASKS = {"commit": COMMIT, "pr": PR}
 
 
+def load_config(path: str | None) -> dict:
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"컨벤션 파일을 읽을 수 없습니다 ({path}): {e}")
+
+
+def apply_convention(task: Task, overrides: dict) -> Task:
+    overrides = {k: tuple(v) if isinstance(v, list) else v for k, v in overrides.items()}
+    try:
+        task = replace(task, **overrides)
+        re.compile(task.title_pattern)
+    except TypeError as e:
+        raise RuntimeError(f"컨벤션 파일에 알 수 없는 항목이 있습니다: {e}")
+    except re.error as e:
+        raise RuntimeError(f"title_pattern 정규식 오류: {e}")
+    return task
+
+
 def run_git(*args: str) -> str:
     try:
         result = subprocess.run(["git", *args], check=True, capture_output=True, text=True)
@@ -126,9 +166,20 @@ def get_changes(status: str) -> tuple[str, str]:
     return "\n".join(line for line in status.splitlines() if line[:1] not in " ?"), staged
 
 
-def apply_safe_mode(diff: str, max_files: int, max_lines: int) -> str:
-    for pattern, replacement in SENSITIVE_PATTERNS:
-        diff = pattern.sub(replacement, diff)
+def compile_patterns(extra: list) -> list:
+    try:
+        custom = [("사용자 정의", re.compile(p), r) for p, r in extra]
+    except (re.error, ValueError, TypeError) as e:
+        raise RuntimeError(f"extra_patterns 형식 오류 ([정규식, 치환값] 목록이어야 함): {e}")
+    return custom + SENSITIVE_PATTERNS
+
+
+def apply_safe_mode(diff: str, max_files: int, max_lines: int,
+                    patterns: list = SENSITIVE_PATTERNS) -> tuple[str, Counter]:
+    masked = Counter()
+    for label, pattern, replacement in patterns:
+        diff, count = pattern.subn(replacement, diff)
+        masked[label] += count
 
     head, *files = diff.split("diff --git")
     if len(files) > max_files:
@@ -140,15 +191,16 @@ def apply_safe_mode(diff: str, max_files: int, max_lines: int) -> str:
         diff = "\n".join(lines[:max_lines])
         diff += f"\n\n... (나머지 {len(lines) - max_lines}줄 생략됨)"
 
-    return diff
+    return diff, +masked
 
 
 def build_prompt(task: Task, status: str, diff: str) -> str:
+    rules = "".join(f"\n- {rule}" for rule in task.extra_rules)
     return f"""아래 Git 변경 사항을 분석하여 {task.request} 작성해주세요.
 
 **요구사항:**
 {task.requirements}
-- 한글로 작성
+- 한글로 작성{rules}
 
 **변경 파일 목록:**
 {status}
@@ -244,6 +296,8 @@ def polish(task: Task, title: str, body: str) -> tuple[str, str]:
         title = title[:task.title_limit - 3].rstrip() + "..."
     elif task.title_recommended and len(title) > task.title_recommended:
         warn(f"{task.name} 제목 {len(title)}자 (권장: {task.title_recommended}자 이내)")
+    if title and task.title_pattern and not re.search(task.title_pattern, title):
+        warn(f"제목이 컨벤션 형식과 다릅니다 (패턴: {task.title_pattern})")
 
     if task.required_sections:
         body = ensure_sections(body, task.required_sections)
@@ -288,29 +342,42 @@ def get_api_key() -> str:
     return api_key
 
 
-def collect_diff(args, status: str) -> tuple[str, str]:
+def collect_diff(args, status: str, policy: dict) -> tuple[str, str]:
     print("[단계 1/3] Git 변경 사항 수집 중...")
     status, diff = get_changes(status)
 
-    if args.safe_mode:
-        diff = apply_safe_mode(diff, args.max_files, args.max_lines)
+    if args.safe_mode or policy.get("enabled"):
+        # 우선순위: CLI 옵션 > 컨벤션 파일 safe_mode > 기본값
+        limits = {key: getattr(args, key) if getattr(args, key) is not None else policy.get(key, default)
+                  for key, default in SAFE_MODE_DEFAULTS.items()}
+        patterns = compile_patterns(policy.get("extra_patterns", []))
+        diff, masked = apply_safe_mode(diff, limits["max_files"], limits["max_lines"], patterns)
+
+        summary = ", ".join(f"{label} {n}건" for label, n in masked.items()) or "없음"
         print(f"{INDENT}안전 모드 활성화")
-        print(f"{INDENT}- 최대 파일 수: {args.max_files}개")
-        print(f"{INDENT}- 최대 줄 수: {args.max_lines}줄")
+        print(f"{INDENT}- 최대 파일 수: {limits['max_files']}개")
+        print(f"{INDENT}- 최대 줄 수: {limits['max_lines']}줄")
+        print(f"{INDENT}- 마스킹: {summary}")
 
     file_count = len(status.strip().splitlines())
     print(f"{INDENT}변경된 파일: {file_count}개\n")
     return status, diff
 
 
-def run(task: Task, args):
+def run(task: Task, args, policy: dict):
     status = check_git_changes()
-    status, diff = collect_diff(args, status)
-    api_key = get_api_key()
+    status, diff = collect_diff(args, status, policy)
+    prompt = build_prompt(task, status, diff)
 
+    if args.dry_run:
+        print_section("AI에 전송될 프롬프트 (dry-run)", prompt.rstrip())
+        print("\n[통계] API 호출: 0회 (dry-run)\n")
+        return
+
+    api_key = get_api_key()
     print(f"[단계 2/3] 생성 요청 중 (모델: {args.model}, temp: {'기본' if args.temperature is None else args.temperature})...")
     ai = AIClient(api_key, args.model, args.temperature, args.max_tokens)
-    title, body = split_title_body(ai.ask(build_prompt(task, status, diff)))
+    title, body = split_title_body(ai.ask(prompt))
 
     print("[단계 3/3] 결과 검증 및 다듬기 중...")
     title, body = polish(task, title, body)
@@ -337,10 +404,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="최대 토큰 수 (기본: 1024)")
     common.add_argument("--safe-mode", action="store_true",
                         help="안전 모드 활성화 (민감정보 마스킹 및 diff 제한)")
-    common.add_argument("--max-files", type=int, default=10,
+    common.add_argument("--max-files", type=int,
                         help="안전 모드: 최대 파일 수 (기본: 10)")
-    common.add_argument("--max-lines", type=int, default=200,
+    common.add_argument("--max-lines", type=int,
                         help="안전 모드: 최대 줄 수 (기본: 200)")
+    common.add_argument("--convention", metavar="FILE",
+                        help="팀 컨벤션 JSON 파일 (예: .ai-gitgen.json)")
+    common.add_argument("--dry-run", action="store_true",
+                        help="API를 호출하지 않고 전송될 프롬프트만 출력")
 
     parser = argparse.ArgumentParser(description="AI 기반 Git 커밋/PR 자동 생성기")
     subparsers = parser.add_subparsers(dest="command", help="사용 가능한 명령")
@@ -358,7 +429,11 @@ def main():
         sys.exit(1)
 
     try:
-        run(TASKS[args.command], args)
+        config = load_config(args.convention)
+        if config:
+            print(f"[설정] 컨벤션 파일 적용: {args.convention}")
+        task = apply_convention(TASKS[args.command], config.get(args.command, {}))
+        run(task, args, config.get("safe_mode", {}))
     except RuntimeError as e:
         print(f"\n[오류] {e}")
         sys.exit(1)
