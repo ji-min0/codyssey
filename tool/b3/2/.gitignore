@@ -1,0 +1,10 @@
+# API Key
+.env
+
+# Python
+__pycache__/
+.venv/
+venv/
+
+# macOS
+.DS_Store
